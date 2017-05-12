@@ -2,12 +2,15 @@
 
 using System;
 using System.Collections.Generic;
-using OpenPop.Mime;
 using OpenPop.Pop3;
 using System.Configuration;
 using System.IO;
 using System.Linq;
 using ServiceStack.Text;
+using System.Text;
+using KafkaNet.Model;
+using KafkaNet;
+using KafkaNet.Protocol;
 
 #endregion
 
@@ -29,7 +32,7 @@ namespace EmailParser
         /// Action to fetch all email messages
         /// </summary>
         /// <returns></returns>
-        public List<Message> FetchAllMessages()
+        public List<OpenPop.Mime.Message> FetchAllMessages()
         {
             throw new NotImplementedException();
         }
@@ -39,7 +42,7 @@ namespace EmailParser
         /// </summary>
         /// <param name="seenUids"></param>
         /// <returns></returns>
-        public List<Message> FetchUnseenMessages(List<string> seenUids)
+        public List<OpenPop.Mime.Message> FetchUnseenMessages(List<string> seenUids)
         {
             throw new NotImplementedException();
         }
@@ -59,7 +62,7 @@ namespace EmailParser
                     int port = int.Parse(ConfigurationManager.AppSettings["port"]);
                     string username = ConfigurationManager.AppSettings["useremail"];
                     string password = ConfigurationManager.AppSettings["password"];
-                    string processeduidpath  = string.Empty;
+                    string processeduidpath = string.Empty;
                     string processedemaildatapath = string.Empty;
 
                     //Connecting to Pop3
@@ -74,11 +77,11 @@ namespace EmailParser
                     //Get list of files inside the directory to get all the processed emailsuniqueid
                     string[] files = Directory.GetFiles(processedEmailMessageIdFiles);
 
-                    if(files.Length == 0)
+                    if (files.Length == 0)
                     {
                         //Create file if no file exists
-                        processeduidpath =  Path.Combine(processedEmailMessageIdFiles, "processeduid.txt");
-                        processedemaildatapath =  Path.Combine(processedEmailMessageIdFiles, "processed.txt");
+                        processeduidpath = Path.Combine(processedEmailMessageIdFiles, "processeduid.txt");
+                        processedemaildatapath = Path.Combine(processedEmailMessageIdFiles, "processed.txt");
 
                         File.Create(processeduidpath).Dispose();
                         File.Create(processedemaildatapath).Dispose();
@@ -91,10 +94,10 @@ namespace EmailParser
                     List<string> newprocesseduids = new List<string>();
 
                     // Create a list we can return with all new messages
-                    List<Message> newMessages = new List<Message>();
+                    List<OpenPop.Mime.Message> newMessages = new List<OpenPop.Mime.Message>();
 
                     // Create a list of new messages read to store it in a file
-                    List<EmailModel> newEmailMessages = new List<EmailModel>(); 
+                    List<EmailModel> newEmailMessages = new List<EmailModel>();
 
                     // Fetch all the current uids seen
                     List<string> uids = client.GetMessageUids();
@@ -112,7 +115,7 @@ namespace EmailParser
                             // uid in the list has messageNumber of 1, and the second has 
                             // messageNumber 2. Therefore we can fetch the message using
                             // i + 1 since messageNumber should be in range [1, messageCount]
-                            Message unseenMessage = client.GetMessage(i + 1);
+                            OpenPop.Mime.Message unseenMessage = client.GetMessage(i + 1);
 
                             var emailMessage = new EmailModel
                             {
@@ -135,15 +138,18 @@ namespace EmailParser
                     }
 
                     // Write all the processed uniqueemailid to the file to remove processing of the same emailid.
-                    File.WriteAllLines(Path.Combine(processedEmailMessageIdFiles, "processeduid.txt"), newprocesseduids);
+                    //File.WriteAllLines(Path.Combine(processedEmailMessageIdFiles, "processeduid.txt"), newprocesseduids);
                     //foreach(var message in newEmailMessages)
                     //{
-                        File.WriteAllText(Path.Combine(processedEmailMessageIdFiles, "processed.txt"), CsvSerializer.SerializeToCsv<EmailModel>(newEmailMessages));
+                    //File.WriteAllText(Path.Combine(processedEmailMessageIdFiles, "processed.txt"), CsvSerializer.SerializeToCsv<EmailModel>(newEmailMessages));
+                    //WritetoKafka();
+                    ListentoKafka();
                     //}
                 }
+                ListentoKafka();
                 return true;
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 return false;
             }
@@ -170,6 +176,36 @@ namespace EmailParser
 
                 return string.Empty;
             }
+        }
+
+        public bool WritetoKafka()
+        {
+            var options = new KafkaOptions
+            (new Uri("http://localhost:9092"));
+            var router = new BrokerRouter(options);
+
+            var client = new KafkaNet.Producer(router);
+            client.SendMessageAsync("testtopic", new[]
+            { new Message("Hi Hello! Welcome to Kafka!", null) }).Wait();
+
+            Console.ReadLine();
+            return false;
+        }
+
+        public bool ListentoKafka()
+        {
+            var options = new KafkaOptions(new Uri("http://localhost:9092"), new Uri("http://localhost:9092"));
+            var router = new BrokerRouter(options);
+            var consumer = new Consumer(new ConsumerOptions("testtopic", router));
+
+            //Consume returns a blocking IEnumerable (ie: never ending stream)
+            foreach (var message in consumer.Consume())
+            {
+                Console.WriteLine("Response: P{0},O{1} : {2}",
+                    message.Meta.PartitionId, message.Meta.Offset, message.Value);
+                Console.WriteLine(Encoding.UTF8.GetString(message.Value));
+            }
+            return true;
         }
 
     }
